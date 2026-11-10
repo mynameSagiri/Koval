@@ -1,45 +1,74 @@
 package com.koval.app;
 
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.textfield.TextInputEditText;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.functions.FirebaseFunctions;
+import java.util.HashMap;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
-    private static final String PREFS = "geokoval";
+    private TextInputEditText nameInput, roomInput, passwordInput;
+    private Button continueButton;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        nameInput = findViewById(R.id.inputName);
+        roomInput = findViewById(R.id.inputRoom);
+        passwordInput = findViewById(R.id.inputPassword);
+        continueButton = findViewById(R.id.continueBtn);
+        continueButton.setOnClickListener(v -> authenticateAndJoin());
 
-        TextInputEditText nameInput = findViewById(R.id.inputName);
-        TextInputEditText roomInput = findViewById(R.id.inputRoom);
-        TextInputEditText passwordInput = findViewById(R.id.inputPassword);
-        Button continueButton = findViewById(R.id.continueBtn);
-
-        continueButton.setOnClickListener(view -> {
-            String name = valueOf(nameInput.getText());
-            String room = valueOf(roomInput.getText());
-            String password = valueOf(passwordInput.getText());
-            if (name.isEmpty() || room.length() < 4 || password.isEmpty()) {
-                Toast.makeText(this, "Укажите имя, комнату (не менее 4 символов) и пароль", Toast.LENGTH_LONG).show();
-                return;
-            }
-            // Store only on this device for the offline MVP. Never store this password on a real server as plain text.
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString("display_name", name)
-                    .putString("room_name", room)
-                    .putString("room_password", password)
-                    .apply();
-            startActivity(new Intent(this, MapActivity.class));
-        });
+        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+            setBusy(true);
+            FirebaseAuth.getInstance().signInAnonymously()
+                    .addOnSuccessListener(result -> setBusy(false))
+                    .addOnFailureListener(error -> {
+                        setBusy(false);
+                        showError("Не удалось подключиться к Firebase: " + error.getLocalizedMessage());
+                    });
+        }
     }
 
-    private String valueOf(CharSequence text) {
-        return text == null ? "" : text.toString().trim();
+    private void authenticateAndJoin() {
+        String name = value(nameInput), room = value(roomInput), password = value(passwordInput);
+        if (name.isEmpty() || room.length() < 4 || password.length() < 4) {
+            showError("Укажите имя, название комнаты (не менее 4 символов) и пароль (не менее 4 символов).");
+            return;
+        }
+        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+            showError("Подключение ещё не готово. Проверьте интернет и повторите попытку.");
+            return;
+        }
+        setBusy(true);
+        Map<String, Object> input = new HashMap<>();
+        input.put("displayName", name);
+        input.put("roomName", room);
+        input.put("password", password);
+        FirebaseFunctions.getInstance().getHttpsCallable("createOrJoinRoom").call(input)
+                .addOnSuccessListener(result -> {
+                    @SuppressWarnings("unchecked") Map<String, Object> response = (Map<String, Object>) result.getData();
+                    String roomId = String.valueOf(response.get("roomId"));
+                    getSharedPreferences("geokoval", MODE_PRIVATE).edit()
+                            .putString("display_name", name)
+                            .putString("room_name", room)
+                            .putString("room_id", roomId)
+                            .apply();
+                    setBusy(false);
+                    startActivity(new Intent(this, MapActivity.class));
+                })
+                .addOnFailureListener(error -> {
+                    setBusy(false);
+                    showError(error.getLocalizedMessage() == null ? "Не удалось войти в комнату." : error.getLocalizedMessage());
+                });
     }
+
+    private String value(CharSequence value) { return value == null ? "" : value.toString().trim(); }
+    private void setBusy(boolean busy) { continueButton.setEnabled(!busy); continueButton.setText(busy ? "Подключение…" : "Продолжить"); }
+    private void showError(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
 }

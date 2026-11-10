@@ -1,26 +1,26 @@
-# GeoКоваль — Android Java MVP
+# GeoКоваль — Android Java + Firebase
 
-Native Android application written in Java with XML layouts. Open this repository folder in Android Studio, or use VS Code with the Android SDK and Java/Gradle extensions.
+Java Android app with XML layouts, OpenStreetMap tiles (osmdroid), foreground GPS updates, Firebase Anonymous Authentication, Cloud Firestore realtime member/location data, and a callable Cloud Function that securely creates or joins password-protected rooms.
 
-## Run from VS Code
+## Firebase setup (required once by the project owner)
 
-1. Install a JDK 17, Android Studio (for Android SDK/emulator), and VS Code extensions **Extension Pack for Java** and **Gradle for Java**.
-2. In Android Studio's SDK Manager install Android SDK Platform 34 and Build Tools.
-3. Set `ANDROID_HOME` to your Android SDK folder and accept SDK licenses (`sdkmanager --licenses`).
-4. Open this folder in VS Code and run Gradle sync/build. If Gradle is not installed, install Gradle 8.7 or generate the wrapper from Android Studio (`gradle wrapper --gradle-version 8.7`).
-5. Start an emulator or connect an Android phone with USB debugging, then run `gradle installDebug` (or use the Android extension's Run command).
+1. Create a Firebase project in the Firebase Console and add an Android app with package ID `com.koval.app`.
+2. Download `google-services.json` and place it in `app/google-services.json` (never commit a real config if it contains project-specific values you do not want public).
+3. Enable **Authentication → Sign-in method → Anonymous**.
+4. Create a **Cloud Firestore** database.
+5. Install Node.js 20 and Firebase CLI; authenticate and select your Firebase project (`firebase login`, `firebase use --add`).
+6. Deploy the room-join function and Firestore rules from the repository root: `firebase deploy --only functions,firestore:rules`.
+7. In VS Code, install Extension Pack for Java and Gradle for Java. Install JDK 17, Android SDK Platform 34, and Android Build Tools. Open this folder, sync Gradle, start an emulator or connect a phone, then run `gradle installDebug` (or use Android Studio's Run button).
 
-## Included now
+The deployed callable `createOrJoinRoom` is the trusted authority for room creation and password checks. It stores a salted scrypt password hash, not the room password. Room membership/location documents are protected by `firestore.rules`; only authenticated members can read room data, and a user can only write their own location document. Anonymous Firebase users are device/app identities, not verified people; production deployments should add account recovery and consider enabling Firebase App Check and rate limiting.
 
-- Russian join/create-room form with basic input validation.
-- OpenStreetMap map using osmdroid (no Google Maps API key needed).
-- Runtime location permission request and foreground GPS/network location updates.
-- Current-position marker and **Где я?** recenter action.
-- Settings for GPS updates, location sharing preference, and a persisted notification-radius value.
-- Room leave action and participant explanation.
+## Features
 
-## Limitations
+- Create a room on first use or join the same room from another phone with the room name and password.
+- Anonymous Firebase sign-in, room membership updates, and realtime Firestore location listeners.
+- OpenStreetMap map, foreground GPS/network location tracking, current-user marker, other members' markers, participant list, and leave-room action.
+- Location sharing and GPS update preferences; stopping sharing removes the current location document.
 
-This MVP obtains and displays the current device's location. Room name/password and preferences are stored locally with SharedPreferences. It does **not** yet authenticate users, synchronize rooms/locations between devices, display other participants, or send proximity notifications. Those features need a backend (for example, Firebase) and a secure room-membership design. The password is only a local demo value in this build; do not use it as production authentication.
+## Privacy and limitations
 
-OpenStreetMap tiles require internet. Location permission and the device's Location/GPS setting must be enabled. Location updates run only while the map screen is open, avoiding background tracking.
+Location is uploaded only while the map screen is open and the sharing switch is on. The app does not request background location. Other room members can see shared coordinates. Users can stop sharing or leave the room. OpenStreetMap tiles and Firebase require internet. The notice radius is saved as a preference; proximity notifications are not yet implemented. `google-services.json`, a Firebase project, enabled Anonymous Auth, Firestore, and deployed Functions are required before the app can connect.

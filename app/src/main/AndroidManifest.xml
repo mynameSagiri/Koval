@@ -5,14 +5,13 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="GeoКоваль"
         android:supportsRtl="true"
         android:theme="@style/Theme.Koval"
         android:usesCleartextTraffic="false">
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".MapActivity" android:exported="false" />
-        <activity android:name=".AuthActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

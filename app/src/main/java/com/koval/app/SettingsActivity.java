@@ -5,51 +5,57 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.firestore.FieldValue;
+import com.google.firebase.firestore.FirebaseFirestore;
+import java.util.HashMap;
+import java.util.Map;
 
 public class SettingsActivity extends AppCompatActivity {
     private static final String PREFS = "geokoval";
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String roomId = prefs.getString("room_id", null);
+        String uid = FirebaseAuth.getInstance().getUid();
+        SeekBar radius = findViewById(R.id.radiusSeekBar);
+        TextView radiusText = findViewById(R.id.radiusValue);
+        SwitchCompat share = findViewById(R.id.shareSwitch), gps = findViewById(R.id.gpsSwitch);
+        TextView location = findViewById(R.id.locationText), nearest = findViewById(R.id.nearestUserText);
+        int savedRadius = prefs.getInt("notice_radius", 250);
+        radius.setProgress(Math.max(0, Math.min(975, savedRadius - 25)));
+        setRadiusText(radiusText, savedRadius);
+        share.setChecked(prefs.getBoolean("share_location", true));
+        gps.setChecked(prefs.getBoolean("gps_enabled", true));
+        String lat = prefs.getString("last_latitude", null), lon = prefs.getString("last_longitude", null);
+        if (lat != null && lon != null) location.setText("Широта: " + lat + ", долгота: " + lon);
+        nearest.setText("Участники с включённым обменом отображаются на карте.");
 
-        android.content.SharedPreferences preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        SeekBar radiusSeekBar = findViewById(R.id.radiusSeekBar);
-        TextView radiusValue = findViewById(R.id.radiusValue);
-        SwitchCompat shareSwitch = findViewById(R.id.shareSwitch);
-        SwitchCompat gpsSwitch = findViewById(R.id.gpsSwitch);
-        TextView locationText = findViewById(R.id.locationText);
-        TextView nearestText = findViewById(R.id.nearestUserText);
-
-        int radius = preferences.getInt("notice_radius", 250);
-        radiusSeekBar.setProgress(Math.max(0, Math.min(975, radius - 25)));
-        showRadius(radiusValue, radius);
-        shareSwitch.setChecked(preferences.getBoolean("share_location", true));
-        gpsSwitch.setChecked(preferences.getBoolean("gps_enabled", true));
-
-        String lat = preferences.getString("last_latitude", null);
-        String lon = preferences.getString("last_longitude", null);
-        if (lat != null && lon != null) locationText.setText("Широта: " + lat + ", долгота: " + lon);
-        if (!preferences.getBoolean("share_location", true)) nearestText.setText("Передача геопозиции выключена.");
-
-        radiusSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        radius.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 int meters = progress + 25;
-                showRadius(radiusValue, meters);
-                if (fromUser) preferences.edit().putInt("notice_radius", meters).apply();
+                setRadiusText(radiusText, meters);
+                if (fromUser) prefs.edit().putInt("notice_radius", meters).apply();
             }
             @Override public void onStartTrackingTouch(SeekBar bar) { }
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
-        shareSwitch.setOnCheckedChangeListener((button, checked) -> {
-            preferences.edit().putBoolean("share_location", checked).apply();
-            nearestText.setText(checked ? "Участники появятся после подключения сервера комнаты." : "Передача геопозиции выключена.");
+        share.setOnCheckedChangeListener((button, checked) -> {
+            prefs.edit().putBoolean("share_location", checked).apply();
+            if (roomId != null && uid != null) {
+                if (!checked) FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("locations").document(uid).delete();
+                else {
+                    Map<String, Object> member = new HashMap<>();
+                    member.put("sharingLocation", true);
+                    member.put("updatedAt", FieldValue.serverTimestamp());
+                    FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("members").document(uid).update(member);
+                }
+            }
         });
-        gpsSwitch.setOnCheckedChangeListener((button, checked) -> preferences.edit().putBoolean("gps_enabled", checked).apply());
+        gps.setOnCheckedChangeListener((button, checked) -> prefs.edit().putBoolean("gps_enabled", checked).apply());
     }
 
-    private void showRadius(TextView text, int meters) {
-        text.setText("Радиус уведомления: " + meters + " м");
-    }
+    private void setRadiusText(TextView view, int meters) { view.setText("Радиус уведомления: " + meters + " м"); }
 }
