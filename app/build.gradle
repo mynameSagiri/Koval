@@ -1,10 +1,11 @@
 plugins {
     id 'com.android.application'
-    // Firebase's Google Services plugin requires app/google-services.json.
-    // Keep the project buildable in demo/offline mode before Firebase is configured.
-    if (file('google-services.json').exists()) {
-        id 'com.google.gms.google-services'
-    }
+}
+
+// Firebase is optional for local demo mode. Apply the plugin only after
+// google-services.json has been added to the app module.
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
 }
 
 android {

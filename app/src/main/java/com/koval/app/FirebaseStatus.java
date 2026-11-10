@@ -10,7 +10,7 @@ public final class FirebaseStatus {
     public static boolean isConfigured(Context context) {
         try {
             return FirebaseApp.initializeApp(context.getApplicationContext()) != null;
-        } catch (IllegalStateException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             return false;
         }
     }
