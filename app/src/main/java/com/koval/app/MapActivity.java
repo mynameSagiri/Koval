@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import org.osmdroid.config.Configuration;
@@ -24,7 +25,9 @@ import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public class MapActivity extends AppCompatActivity implements LocationListener {
     private static final String PREFS = "geokoval";
@@ -33,6 +36,7 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
     private Location lastLocation;
     private Marker myMarker;
     private boolean locationUpdatesStarted;
+    private boolean firebaseRoom;
     private String uid, roomId, displayName;
     private final Map<String, Marker> memberMarkers = new HashMap<>();
     private ListenerRegistration membersListener, locationsListener;
@@ -53,10 +57,12 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         map.getController().setZoom(12.0);
         map.getController().setCenter(new GeoPoint(51.5336, 46.0343));
 
-        uid = FirebaseAuth.getInstance().getUid();
-        roomId = getSharedPreferences(PREFS, MODE_PRIVATE).getString("room_id", null);
-        displayName = getSharedPreferences(PREFS, MODE_PRIVATE).getString("display_name", "Участник");
-        String roomName = getSharedPreferences(PREFS, MODE_PRIVATE).getString("room_name", "");
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        uid = FirebaseAuth.getInstance().getCurrentUser() == null ? null : FirebaseAuth.getInstance().getUid();
+        roomId = prefs.getString("room_id", null);
+        displayName = prefs.getString("display_name", "Участник");
+        firebaseRoom = prefs.getBoolean("firebase_room", false) && FirebaseStatus.isConfigured(this) && uid != null;
+        String roomName = prefs.getString("room_name", "");
         ((TextView) findViewById(R.id.roomNameText)).setText("Комната: " + roomName);
 
         findViewById(R.id.findMeBtn).setOnClickListener(v -> findMe());
@@ -64,8 +70,9 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         findViewById(R.id.settingsBtn).setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
         findViewById(R.id.participantsBtn).setOnClickListener(v -> showParticipants());
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
-        if (roomId == null || uid == null) { leaveToLogin(); return; }
-        listenForMembers();
+        if (roomId == null) { leaveToLogin(); return; }
+        if (firebaseRoom) listenForMembers();
+        else Toast.makeText(this, "Локальный режим: другие телефоны не синхронизируются до настройки Firebase.", Toast.LENGTH_LONG).show();
         if (hasLocationPermission()) startLocationUpdates();
         else locationPermissionLauncher.launch(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
     }
@@ -74,10 +81,13 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         FirebaseFirestore db = FirebaseFirestore.getInstance();
         membersListener = db.collection("rooms").document(roomId).collection("members")
                 .addSnapshotListener((snapshot, error) -> {
-                    if (error != null) { Toast.makeText(this, "Ошибка получения участников: " + error.getLocalizedMessage(), Toast.LENGTH_SHORT).show(); return; }
+                    if (error != null) { showFirestoreError(error.getLocalizedMessage()); return; }
                     if (snapshot == null) return;
                     Map<String, String> names = new HashMap<>();
-                    for (DocumentSnapshot doc : snapshot.getDocuments()) names.put(doc.getId(), doc.getString("displayName"));
+                    for (DocumentSnapshot doc : snapshot.getDocuments()) {
+                        String name = doc.getString("displayName");
+                        names.put(doc.getId(), name == null ? "Участник" : name);
+                    }
                     listenForLocations(names);
                 });
     }
@@ -86,12 +96,13 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         if (locationsListener != null) locationsListener.remove();
         locationsListener = FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("locations")
                 .addSnapshotListener((snapshot, error) -> {
-                    if (error != null || snapshot == null) return;
+                    if (error != null || snapshot == null) { if (error != null) showFirestoreError(error.getLocalizedMessage()); return; }
+                    Set<String> active = new HashSet<>();
                     for (DocumentSnapshot doc : snapshot.getDocuments()) {
                         Double lat = doc.getDouble("latitude"), lon = doc.getDouble("longitude");
-                        if (lat == null || lon == null) continue;
+                        if (lat == null || lon == null || doc.getId().equals(uid)) continue;
                         String memberId = doc.getId();
-                        if (memberId.equals(uid)) continue;
+                        active.add(memberId);
                         Marker marker = memberMarkers.get(memberId);
                         if (marker == null) {
                             marker = new Marker(map);
@@ -102,13 +113,15 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
                         marker.setPosition(new GeoPoint(lat, lon));
                         marker.setTitle(names.getOrDefault(memberId, "Участник"));
                     }
-                    java.util.Set<String> active = new java.util.HashSet<>();
-                    for (DocumentSnapshot doc : snapshot.getDocuments()) if (!doc.getId().equals(uid)) active.add(doc.getId());
-                    for (String id : new java.util.HashSet<>(memberMarkers.keySet())) {
-                        if (!active.contains(id)) { map.getOverlays().remove(memberMarkers.remove(id)); }
+                    for (String id : new HashSet<>(memberMarkers.keySet())) {
+                        if (!active.contains(id)) map.getOverlays().remove(memberMarkers.remove(id));
                     }
                     map.invalidate();
                 });
+    }
+
+    private void showFirestoreError(String message) {
+        Toast.makeText(this, "Ошибка Firebase: " + (message == null ? "проверьте настройки" : message), Toast.LENGTH_LONG).show();
     }
 
     private boolean hasLocationPermission() {
@@ -120,12 +133,20 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         if (locationUpdatesStarted || locationManager == null || !hasLocationPermission()) return;
         if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("gps_enabled", true)) return;
         try {
-            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, this);
-            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 10f, this);
+            boolean requested = false;
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, this);
+                requested = true;
+            }
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 10f, this);
+                requested = true;
+            }
             Location initial = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
             if (initial == null) initial = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
             if (initial != null) onLocationChanged(initial);
-            locationUpdatesStarted = true;
+            locationUpdatesStarted = requested;
+            if (!requested) Toast.makeText(this, "Включите геолокацию в настройках устройства.", Toast.LENGTH_LONG).show();
         } catch (SecurityException exception) {
             Toast.makeText(this, "Не удалось получить GPS-разрешение.", Toast.LENGTH_SHORT).show();
         }
@@ -149,18 +170,19 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         }
         myMarker.setPosition(point);
         map.invalidate();
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putString("last_latitude", String.valueOf(location.getLatitude()))
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        prefs.edit().putString("last_latitude", String.valueOf(location.getLatitude()))
                 .putString("last_longitude", String.valueOf(location.getLongitude())).apply();
-        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("share_location", true)) {
+        if (firebaseRoom && prefs.getBoolean("share_location", true)) {
             Map<String, Object> data = new HashMap<>();
             data.put("latitude", location.getLatitude());
             data.put("longitude", location.getLongitude());
             data.put("displayName", displayName);
             data.put("roomId", roomId);
-            data.put("updatedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+            data.put("updatedAt", FieldValue.serverTimestamp());
             FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("locations")
-                    .document(uid).set(data);
+                    .document(uid).set(data)
+                    .addOnFailureListener(error -> showFirestoreError(error.getLocalizedMessage()));
         }
     }
 
@@ -178,6 +200,7 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
             text.append("\n\nНа карте:");
             for (Marker marker : memberMarkers.values()) text.append("\n• ").append(marker.getTitle());
         }
+        if (!firebaseRoom) text.append("\n\nЭто локальная демонстрационная комната.");
         new AlertDialog.Builder(this).setTitle("Участники").setMessage(text.toString()).setPositiveButton("Закрыть", null).show();
     }
 
@@ -185,14 +208,18 @@ public class MapActivity extends AppCompatActivity implements LocationListener {
         new AlertDialog.Builder(this).setTitle("Покинуть комнату?").setMessage("Ваша запись участника и геопозиция будут удалены.")
                 .setNegativeButton("Отмена", null).setPositiveButton("Покинуть", (dialog, which) -> {
                     stopLocationUpdates();
-                    FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("locations").document(uid).delete();
-                    FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("members").document(uid).delete()
-                            .addOnCompleteListener(task -> leaveToLogin());
+                    if (firebaseRoom) {
+                        FirebaseFirestore db = FirebaseFirestore.getInstance();
+                        db.batch()
+                                .delete(db.collection("rooms").document(roomId).collection("locations").document(uid))
+                                .delete(db.collection("rooms").document(roomId).collection("members").document(uid))
+                                .commit().addOnCompleteListener(task -> leaveToLogin());
+                    } else leaveToLogin();
                 }).show();
     }
 
     private void leaveToLogin() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("room_id").remove("room_name").apply();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("room_id").remove("room_name").remove("firebase_room").apply();
         startActivity(new Intent(this, MainActivity.class));
         finish();
     }

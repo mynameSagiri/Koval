@@ -19,7 +19,8 @@ public class SettingsActivity extends AppCompatActivity {
         setContentView(R.layout.activity_settings);
         android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String roomId = prefs.getString("room_id", null);
-        String uid = FirebaseAuth.getInstance().getUid();
+        String uid = FirebaseAuth.getInstance().getCurrentUser() == null ? null : FirebaseAuth.getInstance().getUid();
+        boolean firebaseRoom = prefs.getBoolean("firebase_room", false) && FirebaseStatus.isConfigured(this) && uid != null;
         SeekBar radius = findViewById(R.id.radiusSeekBar);
         TextView radiusText = findViewById(R.id.radiusValue);
         SwitchCompat share = findViewById(R.id.shareSwitch), gps = findViewById(R.id.gpsSwitch);
@@ -31,7 +32,7 @@ public class SettingsActivity extends AppCompatActivity {
         gps.setChecked(prefs.getBoolean("gps_enabled", true));
         String lat = prefs.getString("last_latitude", null), lon = prefs.getString("last_longitude", null);
         if (lat != null && lon != null) location.setText("Широта: " + lat + ", долгота: " + lon);
-        nearest.setText("Участники с включённым обменом отображаются на карте.");
+        nearest.setText(firebaseRoom ? "Участники с включённым обменом отображаются на карте." : "Для участников из других телефонов настройте Firebase.");
 
         radius.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
@@ -44,15 +45,14 @@ public class SettingsActivity extends AppCompatActivity {
         });
         share.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean("share_location", checked).apply();
-            if (roomId != null && uid != null) {
-                if (!checked) FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("locations").document(uid).delete();
-                else {
-                    Map<String, Object> member = new HashMap<>();
-                    member.put("sharingLocation", true);
-                    member.put("updatedAt", FieldValue.serverTimestamp());
-                    FirebaseFirestore.getInstance().collection("rooms").document(roomId).collection("members").document(uid).update(member);
-                }
-            }
+            if (!firebaseRoom || roomId == null) return;
+            FirebaseFirestore db = FirebaseFirestore.getInstance();
+            Map<String, Object> member = new HashMap<>();
+            member.put("sharingLocation", checked);
+            member.put("updatedAt", FieldValue.serverTimestamp());
+            db.collection("rooms").document(roomId).collection("members").document(uid).update(member)
+                    .addOnFailureListener(error -> android.widget.Toast.makeText(this, "Не удалось обновить настройки обмена: " + error.getLocalizedMessage(), android.widget.Toast.LENGTH_LONG).show());
+            if (!checked) db.collection("rooms").document(roomId).collection("locations").document(uid).delete();
         });
         gps.setOnCheckedChangeListener((button, checked) -> prefs.edit().putBoolean("gps_enabled", checked).apply());
     }
